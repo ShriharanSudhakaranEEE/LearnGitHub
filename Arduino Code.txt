@@ -1,0 +1,291 @@
+#include <SoftwareSerial.h>
+#include <EmonLib.h>
+EnergyMonitor emon1;
+#include <LiquidCrystal.h>
+LiquidCrystal lcd(7, 6, 5, 4, 3, 2);
+float powerFactor;
+float powerFActor;
+float Voltages;
+char mobileNumber;
+int count;
+SoftwareSerial SIM900A(9,10); //purple9,red10
+const int voltageSensor = A0;
+const int currentSensor = A1;
+int mVperAmp = 100; 
+const int tampSensor = A4;
+int value = 0;
+#include <SPI.h>
+#include <SD.h>
+File myFile;
+double sumWH = 0.00000;
+float WH = 0;
+double sumRupees = 0.00000;
+float rupees = 0;
+double Voltage = 0;
+double vrms = 0;
+double current = 0;
+double irms = 0;
+double power = 0;
+
+void setup()
+{
+  pinMode(8, OUTPUT);
+  Serial.begin(19200);
+  SIM900A.begin(9600);
+  delay(500);
+  emon1.voltage(A2, 230, 1.7);
+  emon1.current(A3, 58);
+  Serial.print("Initializing SD card...");
+  if (!SD.begin(11)) {
+    Serial.println("initialization failed!");  
+  }
+  else
+     {
+       Serial.println("initialization done.");
+     }
+  delay(100);
+  lcd.begin(20, 4);
+  lcd.clear();
+}
+
+
+void energyCalculations()
+{
+  vrms = Voltages; 
+  Serial.print("VOLTAGE : ");
+  Serial.print(vrms);
+  Serial.println("Volt");
+  current = getVPP(1);
+  irms = (current / 2.0) * 0.707 * 1000 / mVperAmp;
+  Serial.print("CURRENT :");
+  Serial.print(irms);
+  Serial.println("Amps");
+  power = (vrms * irms *powerFActor );
+  Serial.print("Power Factor :");
+  Serial.print(powerFActor);
+  Serial.println("");
+  Serial.print("POWER :");
+  Serial.print(power);
+  Serial.println("watt");
+  WH = (power / 3600);
+  Serial.print("ENERGY CONSUMED :");
+  Serial.print(WH);
+  Serial.println("Watt-Hour");
+  sumWH = sumWH + WH;
+  Serial.print("TOTAL ENERGY CONSUMED :");
+  Serial.print(sumWH);
+  Serial.println("Watt-Hour");
+  rupees = getReading();
+  Serial.print("ENERGY CONSUMED IN RUPEES :");
+  Serial.print(rupees);
+  Serial.println("Rs.");
+  sumRupees = sumRupees + rupees ;
+  Serial.print("TOTAL ENERGY CONSUMED IN RUPEES :");
+  Serial.print(sumRupees);
+  Serial.println("Rs.");
+  Serial.println("");
+  lcd.setCursor(1, 0);
+  lcd.print(vrms);
+  lcd.print("v");
+  lcd.setCursor(12, 0);
+  lcd.print(irms);
+  lcd.print("A");
+  lcd.setCursor(1, 1);
+  lcd.print(power);
+  lcd.print(" W");
+  lcd.setCursor(12, 1);
+  lcd.print(WH);
+  lcd.print("WH");
+  lcd.setCursor(1, 2);
+  lcd.print(sumWH);
+  lcd.print("Total WH "); 
+  lcd.setCursor(1, 3); 
+  lcd.print(powerFActor);
+  lcd.print(" PF.");
+  delay(5000);
+  lcd.clear();
+}
+
+void loop()
+{
+
+  emon1.calcVI(20, 2000);
+  emon1.serialprint();
+  powerFActor = emon1.powerFactor;
+  Voltages = emon1.Vrms;
+  powerFActor= powerFActor*1;
+  if(irms<0.20)
+  {
+    powerFActor=0;
+  }
+  energyCalculations();
+  if (count == 60)
+  {
+  SendMessage();
+  count = 0;
+  }
+  count = count +1;
+  sdcard();
+// Load Managment Body;
+  if (power >= 250)
+  {
+    digitalWrite(8, HIGH);
+    lcd.setCursor(1, 0); 
+    lcd.print(" LOAD ABOVE LIMIT");
+    SendMessage1();
+    delay(60000);
+    lcd.clear();     
+  }
+  else {
+    digitalWrite(8, LOW);
+    delay(500);
+  }
+// Tampering Body;
+  value = analogRead(A4);
+  Serial.println(value);
+  if (value == 1023)
+  {
+    digitalWrite(8, HIGH);
+    Serial.println("Your Meter IS TEMPERED");
+    lcd.setCursor(1, 0); 
+    lcd.print(" METER IS TEMPERED");
+    SendMessage2();
+    delay(6000);
+    lcd.clear();
+ }
+ else {
+   digitalWrite(8,LOW);
+   delay(500);
+ }  
+}
+
+
+float getVPP(int pinValue)
+{
+  float result;
+  int readValue; 
+  int maxValue = 0;        
+  int minValue = 1024;        
+  uint32_t start_time = millis();
+  while ((millis() - start_time) < 1000)
+  {
+    if (pinValue == 0)
+    {
+      readValue = analogRead(voltageSensor);
+    }
+    else if (pinValue == 1)
+    {
+      readValue = analogRead(currentSensor);
+    }
+    if (readValue > maxValue)
+    {
+      maxValue = readValue;
+    }
+    if (readValue < minValue)
+    {
+      minValue = readValue;
+    }
+  }
+  result = ((maxValue - minValue) * 5.0) / 1024.0;
+  return result;
+}
+
+
+float getReading()
+{
+  float solution;
+  if (sumWH <= 50)
+    solution = (WH * 3.15);
+  if (( sumWH > 50 ) && ( sumWH <= 100 ))
+    solution = ( WH * 3.60 );
+  if (( sumWH > 100 ) && (sumWH <= 250))
+    solution = (WH * 4.25);
+  if (sumWH > 250)
+    solution = (WH * 5.20);
+  return solution;
+}
+
+
+void SendMessage()
+{
+  Serial.println ("Sending Message");
+  SIM900A.println("AT+CMGF=1");
+  delay(500);
+  Serial.println ("Set SMS Number");
+  SIM900A.println("AT+CMGS=\"+923406962922\"\r");
+  delay(500);
+  Serial.println ("Set SMS Content");
+  SIM900A.println("Smart Energy Meter");
+  delay(500);
+  SIM900A.print("Dear Customer, Your Energy Consumption is :");
+  SIM900A.println(sumWH);
+  SIM900A.print("Total Billing is Rs. ");
+  SIM900A.println(sumRupees);
+  delay(500);  
+  Serial.println ("Finish");
+  SIM900A.println((char)26);// ASCII code of CTRL+Z
+  delay(500);
+  Serial.println ("Message has been sent");
+}
+
+
+void sdcard()
+{
+  myFile = SD.open("test.txt", FILE_WRITE);
+  if (myFile) {
+    Serial.print("Writing to sd card...");
+    myFile.print("  Voltages  : ");
+    myFile.print(vrms);
+    myFile.print("    Current  : ");
+    myFile.print(irms);
+    myFile.print("    Power  : ");
+    myFile.print(power);
+    myFile.print("   Energy  : ");
+    myFile.print(sumWH);
+    myFile.print("    Bill  : ");
+    myFile.println(sumRupees);
+    myFile.close();
+    Serial.println("done.");
+  } else {
+    Serial.println("Error opening SD Card");
+  }
+}
+
+
+void SendMessage1()
+{
+  Serial.println ("Sending Message");
+  SIM900A.println("AT+CMGF=1");
+  delay(500);
+  Serial.println ("Set SMS Number");
+  SIM900A.println("AT+CMGS=\"+923406962922\"\r");
+  delay(500);
+  Serial.println ("Set SMS Content");
+  SIM900A.println("Smart energy meter");
+  delay(500);
+  SIM900A.print("Dear Customer, you are using load above the limit,kindly lower your load ");
+  delay(500);
+  Serial.println ("Finish");
+  SIM900A.println((char)26);// ASCII code of CTRL+Z
+  delay(500);
+  Serial.println ("Message has been sent");
+}
+
+
+void SendMessage2()
+{
+  Serial.println ("Sending Message");
+  SIM900A.println("AT+CMGF=1");
+  delay(500);
+  Serial.println ("Set SMS Number");
+  SIM900A.println("AT+CMGS=\"+923406962922\"\r");
+  delay(500);
+  Serial.println ("Set SMS Content");
+  SIM900A.println("Smart energy meter");
+  delay(500);
+  SIM900A.print("Dear Customer, your meter has been tempered "); 
+  Serial.println ("Finish");
+  SIM900A.println((char)26);// ASCII code of CTRL+Z
+  delay(500);
+  Serial.println ("Message has been sent");
+}
